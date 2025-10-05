@@ -12,7 +12,6 @@ jobs:
         with:
           submodules: recursive
 
-      # 1) Hent OpenCPN + win_deps (inkl. wxWidgets cache)
       - name: Prepare OpenCPN deps (download toolchain + wxWidgets)
         shell: pwsh
         run: |
@@ -21,7 +20,6 @@ jobs:
           & buildwin\win_deps.bat
           if ($LASTEXITCODE -ne 0) { throw "win_deps.bat failed: $LASTEXITCODE" }
 
-      # 2) Finn wxWidgets i cache og eksporter til env
       - name: Locate wxWidgets in cache and export env
         shell: pwsh
         run: |
@@ -44,7 +42,6 @@ jobs:
           Write-Host "wxWidgets_LIB_DIR=$lib"
           Write-Host "wxWidgets_CONFIGURATION=mswu"
 
-      # 3) Gettext: installer via MSYS2, eller lag "fake" cmd-wrappere som tilfredsstiller FindGettext
       - name: Install gettext tools (with fallback)
         shell: pwsh
         run: |
@@ -70,7 +67,6 @@ jobs:
           Write-Host "msgfmt:  $fmt"
           Write-Host "msgmerge: $mer"
 
-      # 4) Configure (x64), slå av i18n, og pek CMake til msgfmt/msgmerge
       - name: Configure (x64)
         shell: pwsh
         run: >
@@ -83,21 +79,19 @@ jobs:
           -DGETTEXT_MSGMERGE_EXECUTABLE="$env:GETTEXT_MSGMERGE_EXECUTABLE"
           -DGETTEXT_MSGFMT_EXECUTABLE="$env:GETTEXT_MSGFMT_EXECUTABLE"
 
-      # 5) Vis hvilke targets som finnes (diagnostikk)
-      - name: List CMake targets
-        shell: pwsh
-        run: cmake --build build --config Release --target help
-
-      # 6) Bygg vanlig + 'package' (siden 'tarball' ikke finnes hos deg)
       - name: Build
         shell: pwsh
         run: cmake --build build --config Release --parallel
 
       - name: Package (CPack)
         shell: pwsh
-        run: cmake --build build --config Release --target package --parallel
+        run: |
+          cmake --build build --config Release --target package --parallel
+          Write-Host "CPack output tree:"
+          if (Test-Path build\_CPack_Packages) {
+            Get-ChildItem -Recurse build\_CPack_Packages | Select-Object FullName,Length | Out-String | Write-Host
+          }
 
-      # 7) Let etter produsert arkiv, vis innhold, last opp
       - name: Find produced archive
         shell: pwsh
         run: |
