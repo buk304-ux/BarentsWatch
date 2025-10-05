@@ -9,7 +9,7 @@ jobs:
         with:
           submodules: recursive
 
-      # Get OpenCPN deps (incl. wxWidgets) and set env vars
+      # --- OpenCPN deps (wxWidgets etc.) ---
       - name: Prepare OpenCPN deps (wxWidgets)
         shell: cmd
         run: |
@@ -19,7 +19,7 @@ jobs:
           if errorlevel 1 exit /b 1
           call cache\wx-config.bat
           if errorlevel 1 exit /b 1
-          rem ---- Export the vars set by wx-config.bat ----
+          rem Export env set by wx-config.bat
           echo wxWidgets_ROOT_DIR=%wxWidgets_ROOT_DIR%>> %GITHUB_ENV%
           echo wxWidgets_LIB_DIR=%wxWidgets_LIB_DIR%>> %GITHUB_ENV%
           echo wxWidgets_CONFIGURATION=mswu>> %GITHUB_ENV%
@@ -34,13 +34,30 @@ jobs:
           if not exist "%wxWidgets_ROOT_DIR%" (echo Missing ROOT && exit /b 1)
           if not exist "%wxWidgets_LIB_DIR%"  (echo Missing LIB  && exit /b 1)
 
+      # --- Gettext (msgfmt/msgmerge) ---
+      - name: Install gettext and export paths
+        shell: pwsh
+        run: |
+          choco install -y gettext
+          $fmt = (Get-Command msgfmt.exe -ErrorAction SilentlyContinue).Source
+          $mer = (Get-Command msgmerge.exe -ErrorAction SilentlyContinue).Source
+          if (-not $fmt) { $fmt = 'C:\ProgramData\chocolatey\lib\gettext\tools\install\bin\msgfmt.exe' }
+          if (-not $mer) { $mer = 'C:\ProgramData\chocolatey\lib\gettext\tools\install\bin\msgmerge.exe' }
+          "GETTEXT_MSGFMT_EXECUTABLE=$fmt"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "GETTEXT_MSGMERGE_EXECUTABLE=$mer"| Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "msgfmt:  $fmt"
+          Write-Host "msgmerge: $mer"
+          if (!(Test-Path $fmt) -or !(Test-Path $mer)) { throw 'Gettext tools not found' }
+
       - name: Configure (x64)
         shell: cmd
         run: |
           cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release ^
             -DwxWidgets_ROOT_DIR="%wxWidgets_ROOT_DIR%" ^
             -DwxWidgets_LIB_DIR="%wxWidgets_LIB_DIR%" ^
-            -DwxWidgets_CONFIGURATION=%wxWidgets_CONFIGURATION%
+            -DwxWidgets_CONFIGURATION=%wxWidgets_CONFIGURATION% ^
+            -DGETTEXT_MSGMERGE_EXECUTABLE="%GETTEXT_MSGMERGE_EXECUTABLE%" ^
+            -DGETTEXT_MSGFMT_EXECUTABLE="%GETTEXT_MSGFMT_EXECUTABLE%"
 
       - name: Build
         shell: cmd
