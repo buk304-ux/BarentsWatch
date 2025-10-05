@@ -5,8 +5,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure (Win32)
-        run: cmake -S . -B build -A Win32 -DCMAKE_BUILD_TYPE=Release
+        with:
+          submodules: recursive   # HENTER opencpn-libs m.m.
+      - name: Configure (x64)
+        run: cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build --config Release --parallel
       - name: Package
