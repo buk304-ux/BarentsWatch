@@ -12,7 +12,7 @@ jobs:
         with:
           submodules: recursive
 
-      # 1) Hent OpenCPN og last ned Windows-deps (inkl. wxWidgets)
+      # 1) Hent OpenCPN og deps (inkl. wxWidgets)
       - name: Prepare OpenCPN deps (download toolchain + wxWidgets)
         shell: cmd
         run: |
@@ -21,59 +21,30 @@ jobs:
           buildwin\win_deps.bat
           if errorlevel 1 exit /b 1
 
-      # 2) Finn wxWidgets-katalog og lib-mappe i cache, eksporter til GITHUB_ENV
+      # 2) Finn wxWidgets i cache og eksporter til env
       - name: Locate wxWidgets in cache and export env
         shell: pwsh
         run: |
           $cache = Join-Path $env:GITHUB_WORKSPACE 'OpenCPN\cache'
           if (!(Test-Path $cache)) { throw "Cache folder not found: $cache" }
-
-          # Finn wxWidgets-<versjon>-mappe (tar den nyeste hvis flere)
           $wx = Get-ChildItem $cache -Directory -Filter 'wxWidgets-*' | Sort-Object Name -Descending | Select-Object -First 1
           if (-not $wx) { throw "wxWidgets-* not found under $cache" }
-
           $root = $wx.FullName
-
-          # Vanlige Win32 lib-stier fra win_deps.bat:
-          $candidates = @(
-            'lib\vc14x_dll',  # typisk for MSVC 2022 (Win32)
-            'lib\vc14x_lib',
-            'lib\vc14\mswud',
-            'lib'
-          )
+          $candidates = @('lib\vc14x_dll','lib\vc14x_lib','lib\vc14\mswud','lib')
           $lib = $null
           foreach ($rel in $candidates) {
             $p = Join-Path $root $rel
             if (Test-Path $p) { $lib = $p; break }
           }
           if (-not $lib) { throw "No wxWidgets lib dir found under $root" }
-
           "wxWidgets_ROOT_DIR=$root"     | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "wxWidgets_LIB_DIR=$lib"       | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "wxWidgets_CONFIGURATION=mswu" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
           Write-Host "wxWidgets_ROOT_DIR=$root"
           Write-Host "wxWidgets_LIB_DIR=$lib"
           Write-Host "wxWidgets_CONFIGURATION=mswu"
 
-      # 3) Installer MSYS2 + gettext (gir msgfmt/msgmerge)
-      - name: Install MSYS2 + gettext tools
-        shell: pwsh
-        run: |
-          choco install -y msys2
-          $roots = @("C:\tools\msys64","C:\msys64")
-          $msys = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $msys) { throw "MSYS2 not found after install." }
-          & "$msys\usr\bin\bash.exe" -lc "pacman -Sy --noconfirm --needed gettext"
-          $fmt = Join-Path $msys "usr\bin\msgfmt.exe"
-          $mer = Join-Path $msys "usr\bin\msgmerge.exe"
-          if (!(Test-Path $fmt) -or !(Test-Path $mer)) { throw 'Gettext tools not found after pacman install.' }
-          "GETTEXT_MSGFMT_EXECUTABLE=$fmt"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "GETTEXT_MSGMERGE_EXECUTABLE=$mer"| Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "msgfmt:  $fmt"
-          Write-Host "msgmerge: $mer"
-
-      # 4) Konfigurer som Win32 (x86)
+      # 3) Konfigurer som Win32 (x86). Slå av i18n for å slippe gettext-krav.
       - name: Configure (Win32)
         shell: cmd
         run: |
@@ -81,9 +52,7 @@ jobs:
             -DwxWidgets_ROOT_DIR="%wxWidgets_ROOT_DIR%" ^
             -DwxWidgets_LIB_DIR="%wxWidgets_LIB_DIR%" ^
             -DwxWidgets_CONFIGURATION=%wxWidgets_CONFIGURATION% ^
-            -DBUILD_I18N=OFF -DPLUGIN_I18N=OFF ^
-            -DGETTEXT_MSGMERGE_EXECUTABLE="%GETTEXT_MSGMERGE_EXECUTABLE%" ^
-            -DGETTEXT_MSGFMT_EXECUTABLE="%GETTEXT_MSGFMT_EXECUTABLE%"
+            -DBUILD_I18N=OFF -DPLUGIN_I18N=OFF
 
       - name: Build
         shell: cmd
@@ -93,7 +62,7 @@ jobs:
         shell: cmd
         run: cmake --build build --config Release --target package
 
-      # 5) Finn, verifiser og last opp KUN .tar.gz (med metadata.xml)
+      # 4) Finn tarball
       - name: Find built tarball
         shell: pwsh
         run: |
@@ -102,11 +71,38 @@ jobs:
           "TARBALL_PATH=$($t.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "Tarball: $($t.FullName)"
 
+      # 5) Hvis metadata.xml mangler, pakk ut og gi riktig navn
+      - name: Ensure metadata.xml is present (rename any *.xml to metadata.xml)
+        shell: pwsh
+        run: |
+          $tar = $env:TARBALL_PATH
+          $tmp = Join-Path $env:RUNNER_TEMP "tarfix"
+          if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+          New-Item -ItemType Directory -Path $tmp | Out-Null
+          tar -xzf $tar -C $tmp
+          $meta = Get-ChildItem $tmp -Filter metadata.xml -Recurse | Select-Object -First 1
+          if (-not $meta) {
+            $anyxml = Get-ChildItem $tmp -Filter *.xml -Recurse | Select-Object -First 1
+            if ($anyxml) {
+              Rename-Item -Path $anyxml.FullName -NewName "metadata.xml"
+            } else {
+              throw "No XML found inside tarball to rename to metadata.xml"
+            }
+          }
+          # repakk alt (toppnivå) til en ny tarball
+          $fixed = Join-Path $env:RUNNER_TEMP "barentswatch_fixed.tar.gz"
+          if (Test-Path $fixed) { Remove-Item $fixed -Force }
+          tar -czf $fixed -C $tmp .
+          "TARBALL_PATH=$fixed" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Repacked tarball: $fixed"
+
+      # 6) Verifiser at metadata.xml finnes i toppnivå
       - name: Verify tarball has metadata.xml
         shell: cmd
         run: |
-          tar -tzf "%TARBALL_PATH%" | findstr /I "metadata.xml" || (echo metadata.xml missing & exit /b 1)
+          tar -tzf "%TARBALL_PATH%" | findstr /R /I "^[^/]*metadata\.xml$" || (echo metadata.xml missing & exit /b 1)
 
+      # 7) Last opp kun den riktige tarballen
       - name: Upload tarball (raw)
         uses: actions/upload-artifact@v4
         with:
