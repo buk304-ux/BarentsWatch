@@ -12,14 +12,16 @@ jobs:
         with:
           submodules: recursive
 
+      # 1) Hent OpenCPN og deps (inkl. wxWidgets)
       - name: Prepare OpenCPN deps (download toolchain + wxWidgets)
-        shell: cmd
+        shell: pwsh
         run: |
           git clone --depth 1 https://github.com/OpenCPN/OpenCPN.git
           cd OpenCPN
-          buildwin\win_deps.bat
-          if errorlevel 1 exit /b 1
+          & buildwin\win_deps.bat
+          if ($LASTEXITCODE -ne 0) { throw "win_deps.bat failed with code $LASTEXITCODE" }
 
+      # 2) Finn wxWidgets i cache og eksporter stier
       - name: Locate wxWidgets in cache and export env
         shell: pwsh
         run: |
@@ -42,6 +44,7 @@ jobs:
           Write-Host "wxWidgets_LIB_DIR=$lib"
           Write-Host "wxWidgets_CONFIGURATION=mswu"
 
+      # 3) Installer gettext (MSYS2). Om ikke funnet: lag "fake" msgfmt/msgmerge.
       - name: Install gettext tools (with fallback)
         shell: pwsh
         run: |
@@ -59,35 +62,36 @@ jobs:
             New-Item -ItemType Directory -Path $fake | Out-Null
             $fmt = Join-Path $fake "msgfmt.cmd"
             $mer = Join-Path $fake "msgmerge.cmd"
-            $c1 = "@echo msgfmt 0.0 (fake)`r`nexit /b 0`r`n"
-            $c2 = "@echo msgmerge 0.0 (fake)`r`nexit /b 0`r`n"
-            Set-Content -Path $fmt -Value $c1 -Encoding ascii
-            Set-Content -Path $mer -Value $c2 -Encoding ascii
+            Set-Content -Path $fmt -Value "@echo msgfmt 0.0 (fake)`r`nexit /b 0`r`n" -Encoding ascii
+            Set-Content -Path $mer -Value "@echo msgmerge 0.0 (fake)`r`nexit /b 0`r`n" -Encoding ascii
           }
           "GETTEXT_MSGFMT_EXECUTABLE=$fmt"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "GETTEXT_MSGMERGE_EXECUTABLE=$mer"| Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "msgfmt:  $fmt"
           Write-Host "msgmerge: $mer"
 
+      # 4) Configure (Win32/x86)
       - name: Configure (Win32)
-        shell: cmd
-        run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -A Win32 -DCMAKE_GENERATOR_PLATFORM=Win32 -DCMAKE_BUILD_TYPE=Release ^
-            -DwxWidgets_ROOT_DIR="%wxWidgets_ROOT_DIR%" ^
-            -DwxWidgets_LIB_DIR="%wxWidgets_LIB_DIR%" ^
-            -DwxWidgets_CONFIGURATION=%wxWidgets_CONFIGURATION% ^
-            -DBUILD_I18N=OFF -DPLUGIN_I18N=OFF ^
-            -DGETTEXT_MSGMERGE_EXECUTABLE="%GETTEXT_MSGMERGE_EXECUTABLE%" ^
-            -DGETTEXT_MSGFMT_EXECUTABLE="%GETTEXT_MSGFMT_EXECUTABLE%"
+        shell: pwsh
+        run: >
+          cmake -S . -B build -G "Visual Studio 17 2022" -A Win32
+          -DCMAKE_GENERATOR_PLATFORM=Win32 -DCMAKE_BUILD_TYPE=Release
+          -DwxWidgets_ROOT_DIR="$env:wxWidgets_ROOT_DIR"
+          -DwxWidgets_LIB_DIR="$env:wxWidgets_LIB_DIR"
+          -DwxWidgets_CONFIGURATION=$env:wxWidgets_CONFIGURATION
+          -DBUILD_I18N=OFF -DPLUGIN_I18N=OFF
+          -DGETTEXT_MSGMERGE_EXECUTABLE="$env:GETTEXT_MSGMERGE_EXECUTABLE"
+          -DGETTEXT_MSGFMT_EXECUTABLE="$env:GETTEXT_MSGFMT_EXECUTABLE"
 
       - name: Build
-        shell: cmd
+        shell: pwsh
         run: cmake --build build --config Release --parallel
 
       - name: Package
-        shell: cmd
+        shell: pwsh
         run: cmake --build build --config Release --target package
 
+      # 5) Finn .tar.gz, sørg for metadata.xml, og last opp bare riktig fil
       - name: Find built tarball
         shell: pwsh
         run: |
