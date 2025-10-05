@@ -9,7 +9,7 @@ jobs:
         with:
           submodules: recursive
 
-      # --- OpenCPN deps (wxWidgets etc.) ---
+      # --- OpenCPN deps (wxWidgets) ---
       - name: Prepare OpenCPN deps (wxWidgets)
         shell: cmd
         run: |
@@ -34,20 +34,23 @@ jobs:
           if not exist "%wxWidgets_ROOT_DIR%" (echo Missing ROOT && exit /b 1)
           if not exist "%wxWidgets_LIB_DIR%"  (echo Missing LIB  && exit /b 1)
 
-      # --- Gettext (msgfmt/msgmerge) ---
-      - name: Install gettext and export paths
+      # --- Install MSYS2 and gettext tools (msgfmt/msgmerge) ---
+      - name: Install MSYS2
         shell: pwsh
         run: |
-          choco install -y gettext
-          $fmt = (Get-Command msgfmt.exe -ErrorAction SilentlyContinue).Source
-          $mer = (Get-Command msgmerge.exe -ErrorAction SilentlyContinue).Source
-          if (-not $fmt) { $fmt = 'C:\ProgramData\chocolatey\lib\gettext\tools\install\bin\msgfmt.exe' }
-          if (-not $mer) { $mer = 'C:\ProgramData\chocolatey\lib\gettext\tools\install\bin\msgmerge.exe' }
-          "GETTEXT_MSGFMT_EXECUTABLE=$fmt"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "GETTEXT_MSGMERGE_EXECUTABLE=$mer"| Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          choco install -y msys2
+          $roots = @("C:\tools\msys64","C:\msys64")
+          $msys = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $msys) { throw "MSYS2 not found after install." }
+          # Install gettext tools in Mingw64 environment
+          & "$msys\usr\bin\bash.exe" -lc "pacman -Sy --noconfirm --needed mingw-w64-x86_64-gettext-tools"
+          $fmt = Join-Path $msys "mingw64\bin\msgfmt.exe"
+          $mer = Join-Path $msys "mingw64\bin\msgmerge.exe"
+          if (!(Test-Path $fmt) -or !(Test-Path $mer)) { throw 'Gettext tools not found after pacman install.' }
+          'GETTEXT_MSGFMT_EXECUTABLE={0}' -f $fmt | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          'GETTEXT_MSGMERGE_EXECUTABLE={0}' -f $mer | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "msgfmt:  $fmt"
           Write-Host "msgmerge: $mer"
-          if (!(Test-Path $fmt) -or !(Test-Path $mer)) { throw 'Gettext tools not found' }
 
       - name: Configure (x64)
         shell: cmd
