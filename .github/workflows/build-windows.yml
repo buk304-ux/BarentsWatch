@@ -1,5 +1,8 @@
 name: build-windows
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
 
 jobs:
   win:
@@ -9,7 +12,7 @@ jobs:
         with:
           submodules: recursive
 
-      # 1) Fetch OpenCPN deps (incl. wxWidgets)
+      # 1) Hent OpenCPN og last ned Windows-deps (inkl. wxWidgets)
       - name: Prepare OpenCPN deps (download toolchain + wxWidgets)
         shell: cmd
         run: |
@@ -18,26 +21,42 @@ jobs:
           buildwin\win_deps.bat
           if errorlevel 1 exit /b 1
 
-      # 2) Locate wxWidgets in cache and export env
+      # 2) Finn wxWidgets-katalog og lib-mappe i cache, eksporter til GITHUB_ENV
       - name: Locate wxWidgets in cache and export env
         shell: pwsh
         run: |
           $cache = Join-Path $env:GITHUB_WORKSPACE 'OpenCPN\cache'
           if (!(Test-Path $cache)) { throw "Cache folder not found: $cache" }
+
+          # Finn wxWidgets-<versjon>-mappe (tar den nyeste hvis flere)
           $wx = Get-ChildItem $cache -Directory -Filter 'wxWidgets-*' | Sort-Object Name -Descending | Select-Object -First 1
           if (-not $wx) { throw "wxWidgets-* not found under $cache" }
+
           $root = $wx.FullName
-          $candidates = @('lib\vc14x_dll','lib\vc14x_lib','lib\vc14\mswud','lib')
-          $lib = $null; foreach ($rel in $candidates) { $p = Join-Path $root $rel; if (Test-Path $p) { $lib = $p; break } }
+
+          # Vanlige Win32 lib-stier fra win_deps.bat:
+          $candidates = @(
+            'lib\vc14x_dll',  # typisk for MSVC 2022 (Win32)
+            'lib\vc14x_lib',
+            'lib\vc14\mswud',
+            'lib'
+          )
+          $lib = $null
+          foreach ($rel in $candidates) {
+            $p = Join-Path $root $rel
+            if (Test-Path $p) { $lib = $p; break }
+          }
           if (-not $lib) { throw "No wxWidgets lib dir found under $root" }
+
           "wxWidgets_ROOT_DIR=$root"     | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "wxWidgets_LIB_DIR=$lib"       | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "wxWidgets_CONFIGURATION=mswu" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
           Write-Host "wxWidgets_ROOT_DIR=$root"
           Write-Host "wxWidgets_LIB_DIR=$lib"
           Write-Host "wxWidgets_CONFIGURATION=mswu"
 
-      # 3) Install MSYS2 + gettext (provides msgfmt/msgmerge)
+      # 3) Installer MSYS2 + gettext (gir msgfmt/msgmerge)
       - name: Install MSYS2 + gettext tools
         shell: pwsh
         run: |
@@ -54,7 +73,7 @@ jobs:
           Write-Host "msgfmt:  $fmt"
           Write-Host "msgmerge: $mer"
 
-      # 4) Configure Win32 (x86). Keep i18n OFF, but provide gettext so configure passes.
+      # 4) Konfigurer som Win32 (x86)
       - name: Configure (Win32)
         shell: cmd
         run: |
@@ -74,8 +93,22 @@ jobs:
         shell: cmd
         run: cmake --build build --config Release --target package
 
-      - name: Upload tarball
+      # 5) Finn, verifiser og last opp KUN .tar.gz (med metadata.xml)
+      - name: Find built tarball
+        shell: pwsh
+        run: |
+          $t = Get-ChildItem build -Filter *.tar.gz -Recurse | Select-Object -First 1
+          if (-not $t) { throw "No .tar.gz found under build/" }
+          "TARBALL_PATH=$($t.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Tarball: $($t.FullName)"
+
+      - name: Verify tarball has metadata.xml
+        shell: cmd
+        run: |
+          tar -tzf "%TARBALL_PATH%" | findstr /I "metadata.xml" || (echo metadata.xml missing & exit /b 1)
+
+      - name: Upload tarball (raw)
         uses: actions/upload-artifact@v4
         with:
-          name: plugin-windows
-          path: build\*.tar.gz
+          name: plugin-windows-tarball
+          path: ${{ env.TARBALL_PATH }}
