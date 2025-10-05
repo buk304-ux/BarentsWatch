@@ -44,7 +44,48 @@ jobs:
           Write-Host "wxWidgets_LIB_DIR=$lib"
           Write-Host "wxWidgets_CONFIGURATION=mswu"
 
-      # 3) Konfigurer som Win32 (x86). Slå av i18n for å slippe gettext-krav.
+      # 3) Installer MSYS2 + gettext (gir msgfmt/msgmerge); fall back til 'fake' hvis ikke funnet
+      - name: Install gettext tools (with fallback)
+        shell: pwsh
+        run: |
+          choco install -y msys2
+          $roots = @("C:\tools\msys64","C:\msys64")
+          $msys = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if ($msys) {
+            & "$msys\usr\bin\bash.exe" -lc "pacman -Sy --noconfirm --needed gettext"
+            $fmt = Join-Path $msys "usr\bin\msgfmt.exe"
+            $mer = Join-Path $msys "usr\bin\msgmerge.exe"
+          }
+          # Fallback: lag dummy-kommandoer hvis ikke funnet
+          if (-not (Test-Path $fmt) -or -not (Test-Path $mer)) {
+            $fake = Join-Path $env:RUNNER_TEMP "fake-gettext"
+            New-Item -ItemType Directory -Path $fake | Out-Null
+            $fmt = Join-Path $fake "msgfmt.cmd"
+            $mer = Join-Path $fake "msgmerge.cmd"
+            @"
+@echo msgfmt 0.0 (fake)
+exit /b 0
+"@ | Out-File -FilePath $fmt -Encoding ascii
+            @"
+@echo msgmerge 0.0 (fake)
+exit /b 0
+"@ | Out-File -FilePath $mer -Encoding ascii
+          }
+          "GETTEXT_MSGFMT_EXECUTABLE=$fmt"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "GETTEXT_MSGMERGE_EXECUTABLE=$mer"| Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "msgfmt:  $fmt"
+          Write-Host "msgmerge: $mer"
+          if (!(Test-Path $fmt) -or !(Test-Path $mer)) { throw 'Gettext tools not available.' }
+
+      - name: Show gettext env (debug)
+        shell: pwsh
+        run: |
+          "GETTEXT_MSGFMT_EXECUTABLE=$env:GETTEXT_MSGFMT_EXECUTABLE" | Write-Host
+          "GETTEXT_MSGMERGE_EXECUTABLE=$env:GETTEXT_MSGMERGE_EXECUTABLE" | Write-Host
+          if (!(Test-Path $env:GETTEXT_MSGFMT_EXECUTABLE)) { throw "msgfmt path invalid" }
+          if (!(Test-Path $env:GETTEXT_MSGMERGE_EXECUTABLE)) { throw "msgmerge path invalid" }
+
+      # 4) Konfigurer som Win32 (x86)
       - name: Configure (Win32)
         shell: cmd
         run: |
@@ -52,7 +93,9 @@ jobs:
             -DwxWidgets_ROOT_DIR="%wxWidgets_ROOT_DIR%" ^
             -DwxWidgets_LIB_DIR="%wxWidgets_LIB_DIR%" ^
             -DwxWidgets_CONFIGURATION=%wxWidgets_CONFIGURATION% ^
-            -DBUILD_I18N=OFF -DPLUGIN_I18N=OFF
+            -DBUILD_I18N=OFF -DPLUGIN_I18N=OFF ^
+            -DGETTEXT_MSGMERGE_EXECUTABLE="%GETTEXT_MSGMERGE_EXECUTABLE%" ^
+            -DGETTEXT_MSGFMT_EXECUTABLE="%GETTEXT_MSGFMT_EXECUTABLE%"
 
       - name: Build
         shell: cmd
@@ -62,7 +105,7 @@ jobs:
         shell: cmd
         run: cmake --build build --config Release --target package
 
-      # 4) Finn tarball
+      # 5) Finn tarball
       - name: Find built tarball
         shell: pwsh
         run: |
@@ -71,7 +114,7 @@ jobs:
           "TARBALL_PATH=$($t.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "Tarball: $($t.FullName)"
 
-      # 5) Hvis metadata.xml mangler, pakk ut og gi riktig navn
+      # 6) Sikre at metadata.xml finnes (rename evt. vilkårlig .xml)
       - name: Ensure metadata.xml is present (rename any *.xml to metadata.xml)
         shell: pwsh
         run: |
@@ -89,20 +132,19 @@ jobs:
               throw "No XML found inside tarball to rename to metadata.xml"
             }
           }
-          # repakk alt (toppnivå) til en ny tarball
           $fixed = Join-Path $env:RUNNER_TEMP "barentswatch_fixed.tar.gz"
           if (Test-Path $fixed) { Remove-Item $fixed -Force }
           tar -czf $fixed -C $tmp .
           "TARBALL_PATH=$fixed" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "Repacked tarball: $fixed"
 
-      # 6) Verifiser at metadata.xml finnes i toppnivå
+      # 7) Verifiser at metadata.xml ligger i toppnivå på tarballen
       - name: Verify tarball has metadata.xml
         shell: cmd
         run: |
           tar -tzf "%TARBALL_PATH%" | findstr /R /I "^[^/]*metadata\.xml$" || (echo metadata.xml missing & exit /b 1)
 
-      # 7) Last opp kun den riktige tarballen
+      # 8) Last opp kun den riktige tarballen
       - name: Upload tarball (raw)
         uses: actions/upload-artifact@v4
         with:
