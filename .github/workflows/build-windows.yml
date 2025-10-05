@@ -12,7 +12,6 @@ jobs:
         with:
           submodules: recursive
 
-      # 1) Hent OpenCPN og deps (inkl. wxWidgets)
       - name: Prepare OpenCPN deps (download toolchain + wxWidgets)
         shell: cmd
         run: |
@@ -21,7 +20,6 @@ jobs:
           buildwin\win_deps.bat
           if errorlevel 1 exit /b 1
 
-      # 2) Finn wxWidgets i cache og eksporter til env
       - name: Locate wxWidgets in cache and export env
         shell: pwsh
         run: |
@@ -44,48 +42,33 @@ jobs:
           Write-Host "wxWidgets_LIB_DIR=$lib"
           Write-Host "wxWidgets_CONFIGURATION=mswu"
 
-      # 3) Installer MSYS2 + gettext (gir msgfmt/msgmerge); fall back til 'fake' hvis ikke funnet
       - name: Install gettext tools (with fallback)
         shell: pwsh
         run: |
           choco install -y msys2
           $roots = @("C:\tools\msys64","C:\msys64")
           $msys = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $fmt = $null; $mer = $null
           if ($msys) {
             & "$msys\usr\bin\bash.exe" -lc "pacman -Sy --noconfirm --needed gettext"
             $fmt = Join-Path $msys "usr\bin\msgfmt.exe"
             $mer = Join-Path $msys "usr\bin\msgmerge.exe"
           }
-          # Fallback: lag dummy-kommandoer hvis ikke funnet
-          if (-not (Test-Path $fmt) -or -not (Test-Path $mer)) {
+          if (!(Test-Path $fmt) -or !(Test-Path $mer)) {
             $fake = Join-Path $env:RUNNER_TEMP "fake-gettext"
             New-Item -ItemType Directory -Path $fake | Out-Null
             $fmt = Join-Path $fake "msgfmt.cmd"
             $mer = Join-Path $fake "msgmerge.cmd"
-            @"
-@echo msgfmt 0.0 (fake)
-exit /b 0
-"@ | Out-File -FilePath $fmt -Encoding ascii
-            @"
-@echo msgmerge 0.0 (fake)
-exit /b 0
-"@ | Out-File -FilePath $mer -Encoding ascii
+            $c1 = "@echo msgfmt 0.0 (fake)`r`nexit /b 0`r`n"
+            $c2 = "@echo msgmerge 0.0 (fake)`r`nexit /b 0`r`n"
+            Set-Content -Path $fmt -Value $c1 -Encoding ascii
+            Set-Content -Path $mer -Value $c2 -Encoding ascii
           }
           "GETTEXT_MSGFMT_EXECUTABLE=$fmt"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "GETTEXT_MSGMERGE_EXECUTABLE=$mer"| Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "msgfmt:  $fmt"
           Write-Host "msgmerge: $mer"
-          if (!(Test-Path $fmt) -or !(Test-Path $mer)) { throw 'Gettext tools not available.' }
 
-      - name: Show gettext env (debug)
-        shell: pwsh
-        run: |
-          "GETTEXT_MSGFMT_EXECUTABLE=$env:GETTEXT_MSGFMT_EXECUTABLE" | Write-Host
-          "GETTEXT_MSGMERGE_EXECUTABLE=$env:GETTEXT_MSGMERGE_EXECUTABLE" | Write-Host
-          if (!(Test-Path $env:GETTEXT_MSGFMT_EXECUTABLE)) { throw "msgfmt path invalid" }
-          if (!(Test-Path $env:GETTEXT_MSGMERGE_EXECUTABLE)) { throw "msgmerge path invalid" }
-
-      # 4) Konfigurer som Win32 (x86)
       - name: Configure (Win32)
         shell: cmd
         run: |
@@ -105,7 +88,6 @@ exit /b 0
         shell: cmd
         run: cmake --build build --config Release --target package
 
-      # 5) Finn tarball
       - name: Find built tarball
         shell: pwsh
         run: |
@@ -114,7 +96,6 @@ exit /b 0
           "TARBALL_PATH=$($t.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "Tarball: $($t.FullName)"
 
-      # 6) Sikre at metadata.xml finnes (rename evt. vilkårlig .xml)
       - name: Ensure metadata.xml is present (rename any *.xml to metadata.xml)
         shell: pwsh
         run: |
@@ -138,13 +119,12 @@ exit /b 0
           "TARBALL_PATH=$fixed" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "Repacked tarball: $fixed"
 
-      # 7) Verifiser at metadata.xml ligger i toppnivå på tarballen
       - name: Verify tarball has metadata.xml
-        shell: cmd
+        shell: pwsh
         run: |
-          tar -tzf "%TARBALL_PATH%" | findstr /R /I "^[^/]*metadata\.xml$" || (echo metadata.xml missing & exit /b 1)
+          $ok = tar -tzf $env:TARBALL_PATH | Select-String -Pattern '(^|/)?metadata\.xml$'
+          if (-not $ok) { throw "metadata.xml missing" }
 
-      # 8) Last opp kun den riktige tarballen
       - name: Upload tarball (raw)
         uses: actions/upload-artifact@v4
         with:
