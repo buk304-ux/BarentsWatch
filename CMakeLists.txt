@@ -46,23 +46,23 @@ if (COMMAND cmake_policy)
 endif (COMMAND cmake_policy)
 
 # define plugin name, owner and versions
-set(VERBOSE_NAME "Testplugin")
-set(COMMON_NAME "Testplugin")
-set(TITLE_NAME "testplugin")
-set(PACKAGE_CONTACT "Jon Gough")
-set(PACKAGE "testplugin")
+set(VERBOSE_NAME "standinggear_pi")
+set(COMMON_NAME "BarentsWatch redskap")
+set(TITLE_NAME "BarentsWatch")
+set(PACKAGE_CONTACT "Bjørnulf Kjellmann")
+set(PACKAGE "barentswatch")
 set(SHORT_DESCRIPTION
-    "Plugin to test examples of the ODAPI and JSON interface for ODRAW"
+    "Shows standing gear (Garn/Line/Teine) from Barentswatch in OCPN_Draw"
 )
 set(LONG_DESCRIPTION
-    "testplugin Plugin is used to test out the ODraw API and demonstrate how to use it successfully from another plugin"
+    "Watches redskap.gpx and updates colored lines (Garn=blue, Line=red, Teine=yellow) via ODAPI."
 )
 
-set(VERSION_MAJOR "1")
+set(VERSION_MAJOR "0")
 set(VERSION_MINOR "0")
-set(VERSION_PATCH "301")
+set(VERSION_PATCH "1")
 set(VERSION_TWEAK "0")
-set(VERSION_DATE "15/05/2024") # DD/MM/YYYY format
+set(VERSION_DATE "05/10/2025") # DD/MM/YYYY format
 set(OCPN_MIN_VERSION "ov58")
 
 set(OCPN_API_VERSION_MAJOR "1")
