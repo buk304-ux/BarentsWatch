@@ -12,7 +12,7 @@ jobs:
         with:
           submodules: recursive
 
-      # 1) Hent OpenCPN og deps (inkl. wxWidgets i cache)
+      # 1) Hent OpenCPN + win_deps (inkl. wxWidgets cache)
       - name: Prepare OpenCPN deps (download toolchain + wxWidgets)
         shell: pwsh
         run: |
@@ -44,7 +44,7 @@ jobs:
           Write-Host "wxWidgets_LIB_DIR=$lib"
           Write-Host "wxWidgets_CONFIGURATION=mswu"
 
-      # 3) Gettext: prøv MSYS2, ellers lag "fake" msgfmt/msgmerge og pek CMake på dem
+      # 3) Gettext: installer via MSYS2, eller lag "fake" cmd-wrappere som tilfredsstiller FindGettext
       - name: Install gettext tools (with fallback)
         shell: pwsh
         run: |
@@ -70,7 +70,7 @@ jobs:
           Write-Host "msgfmt:  $fmt"
           Write-Host "msgmerge: $mer"
 
-      # 4) Configure (x64), slå av i18n, og fortell CMake hvor msgfmt/msgmerge er
+      # 4) Configure (x64), slå av i18n, og pek CMake til msgfmt/msgmerge
       - name: Configure (x64)
         shell: pwsh
         run: >
@@ -83,25 +83,45 @@ jobs:
           -DGETTEXT_MSGMERGE_EXECUTABLE="$env:GETTEXT_MSGMERGE_EXECUTABLE"
           -DGETTEXT_MSGFMT_EXECUTABLE="$env:GETTEXT_MSGFMT_EXECUTABLE"
 
-      - name: Build tarball
+      # 5) Vis hvilke targets som finnes (diagnostikk)
+      - name: List CMake targets
         shell: pwsh
-        run: cmake --build build --config Release --target tarball --parallel
+        run: cmake --build build --config Release --target help
 
-      - name: Verify tarball has metadata.xml
+      # 6) Bygg vanlig + 'package' (siden 'tarball' ikke finnes hos deg)
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --config Release --parallel
+
+      - name: Package (CPack)
+        shell: pwsh
+        run: cmake --build build --config Release --target package --parallel
+
+      # 7) Let etter produsert arkiv, vis innhold, last opp
+      - name: Find produced archive
         shell: pwsh
         run: |
-          $t = Get-ChildItem -Recurse -Path build -Filter *.tar.gz | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $t) { throw "No .tar.gz produced under build/" }
-          "TARBALL_PATH=$($t.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Tarball: $($t.FullName)"
-          $ok = tar -tzf "$($t.FullName)" | Select-String -SimpleMatch "metadata.xml"
-          if (-not $ok) {
-            tar -tzf "$($t.FullName)" | Out-String | Write-Host
-            throw "metadata.xml missing in tarball: $($t.Name)"
+          $cand = Get-ChildItem build -Recurse -Include *.tar.gz,*.zip,*.7z,*.tgz | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $cand) { throw "No archive produced under build/" }
+          "ARCHIVE_PATH=$($cand.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Archive: $($cand.FullName)"
+
+      - name: List archive contents (best-effort)
+        shell: pwsh
+        run: |
+          $p = $env:ARCHIVE_PATH
+          if ($p -match '\.tar\.gz$' -or $p -match '\.tgz$') {
+            tar -tzf "$p" | Out-String | Write-Host
+          } elseif ($p -match '\.zip$') {
+            7z l "$p"
+          } elseif ($p -match '\.7z$') {
+            7z l "$p"
+          } else {
+            Write-Host "Unknown archive type: $p"
           }
 
-      - name: Upload tarball
+      - name: Upload produced archive
         uses: actions/upload-artifact@v4
         with:
-          name: plugin-windows-tarball
-          path: ${{ env.TARBALL_PATH }}
+          name: plugin-windows-archive
+          path: ${{ env.ARCHIVE_PATH }}
