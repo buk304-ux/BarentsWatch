@@ -9,7 +9,7 @@ jobs:
         with:
           submodules: recursive
 
-      # Hent OpenCPN og sett opp Windows-avhengigheter (inkl. wxWidgets)
+      # Henter OpenCPN og setter opp Windows-avhengigheter (inkl. wxWidgets).
       - name: Prepare OpenCPN deps (wxWidgets)
         shell: cmd
         run: |
@@ -19,14 +19,37 @@ jobs:
           if errorlevel 1 exit /b 1
           call cache\wx-config.bat
           if errorlevel 1 exit /b 1
-          rem Eksporter variablene til neste trinn
-          echo wxWidgets_ROOT_DIR=%wxWidgets_ROOT_DIR%>> %GITHUB_ENV%
-          echo WXWIN=%wxWidgets_ROOT_DIR%>> %GITHUB_ENV%
+          rem ---- Eksporter miljøvariabler til neste steg ----
+          echo WXWIN=%WXWIN%>> %GITHUB_ENV%
+          echo wxWidgets_ROOT_DIR=%WXWIN%>> %GITHUB_ENV%
+          if exist "%WXWIN%\lib\vc_x64_dll" (
+            echo wxWidgets_LIB_DIR=%WXWIN%\lib\vc_x64_dll>> %GITHUB_ENV%
+          ) else if exist "%WXWIN%\lib\vc_x64_lib" (
+            echo wxWidgets_LIB_DIR=%WXWIN%\lib\vc_x64_lib>> %GITHUB_ENV%
+          ) else (
+            echo Could not determine wxWidgets_LIB_DIR
+            dir "%WXWIN%\lib"
+            exit /b 1
+          )
+          echo wxWidgets_CONFIGURATION=mswu>> %GITHUB_ENV%
+
+      # Debug: vis hva vi satte
+      - name: Show wx env
+        shell: cmd
+        run: |
+          echo WXWIN=%WXWIN%
+          echo wxWidgets_ROOT_DIR=%wxWidgets_ROOT_DIR%
+          echo wxWidgets_LIB_DIR=%wxWidgets_LIB_DIR%
+          echo wxWidgets_CONFIGURATION=%wxWidgets_CONFIGURATION%
+          if not exist "%wxWidgets_LIB_DIR%" (echo Missing wxWidgets lib dir & exit /b 1)
 
       - name: Configure (x64)
         shell: cmd
         run: |
-          cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release -DwxWidgets_ROOT_DIR=%wxWidgets_ROOT_DIR%
+          cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release ^
+            -DwxWidgets_ROOT_DIR=%wxWidgets_ROOT_DIR% ^
+            -DwxWidgets_LIB_DIR=%wxWidgets_LIB_DIR% ^
+            -DwxWidgets_CONFIGURATION=%wxWidgets_CONFIGURATION%
 
       - name: Build
         shell: cmd
