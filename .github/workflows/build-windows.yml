@@ -1,135 +1,91 @@
 name: build-windows
-on:
-  push:
-  pull_request:
-  workflow_dispatch:
+on: [push, pull_request]
 
 jobs:
   win:
     runs-on: windows-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 1) Hent OpenCPN og deps (inkl. wxWidgets)
-      - name: Prepare OpenCPN deps (download toolchain + wxWidgets)
-        shell: pwsh
+      # 1) Hent OpenCPN + last ned Windows-avhengigheter (inkl. wxWidgets cache)
+      - name: Prepare OpenCPN deps (toolchain + wxWidgets)
+        shell: cmd
         run: |
           git clone --depth 1 https://github.com/OpenCPN/OpenCPN.git
           cd OpenCPN
-          & buildwin\win_deps.bat
-          if ($LASTEXITCODE -ne 0) { throw "win_deps.bat failed with code $LASTEXITCODE" }
+          buildwin\win_deps.bat
+          if errorlevel 1 exit /b 1
 
-      # 2) Finn wxWidgets i cache og eksporter stier
+      # 2) Finn wxWidgets og eksporter miljøvariabler
       - name: Locate wxWidgets in cache and export env
         shell: pwsh
         run: |
           $cache = Join-Path $env:GITHUB_WORKSPACE 'OpenCPN\cache'
           if (!(Test-Path $cache)) { throw "Cache folder not found: $cache" }
+
           $wx = Get-ChildItem $cache -Directory -Filter 'wxWidgets-*' | Sort-Object Name -Descending | Select-Object -First 1
           if (-not $wx) { throw "wxWidgets-* not found under $cache" }
+
           $root = $wx.FullName
-          $candidates = @('lib\vc14x_dll','lib\vc14x_lib','lib\vc14\mswud','lib')
+
+          # typisk lib-mappe for MSVC 2022 x64
+          $candidates = @(
+            'lib\vc14x_dll',
+            'lib\vc14x_lib',
+            'lib'
+          )
           $lib = $null
           foreach ($rel in $candidates) {
             $p = Join-Path $root $rel
             if (Test-Path $p) { $lib = $p; break }
           }
           if (-not $lib) { throw "No wxWidgets lib dir found under $root" }
-          "wxWidgets_ROOT_DIR=$root"     | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "wxWidgets_LIB_DIR=$lib"       | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "wxWidgets_CONFIGURATION=mswu" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          "wxWidgets_ROOT_DIR=$root"           | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "wxWidgets_LIB_DIR=$lib"             | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "wxWidgets_CONFIGURATION=mswu"       | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
           Write-Host "wxWidgets_ROOT_DIR=$root"
           Write-Host "wxWidgets_LIB_DIR=$lib"
           Write-Host "wxWidgets_CONFIGURATION=mswu"
 
-      # 3) Installer gettext (MSYS2). Om ikke funnet: lag "fake" msgfmt/msgmerge.
-      - name: Install gettext tools (with fallback)
-        shell: pwsh
+      # 3) Konfigurer for x64, slå av i18n så vi slipper gettext
+      - name: Configure (x64)
+        shell: cmd
         run: |
-          choco install -y msys2
-          $roots = @("C:\tools\msys64","C:\msys64")
-          $msys = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1
-          $fmt = $null; $mer = $null
-          if ($msys) {
-            & "$msys\usr\bin\bash.exe" -lc "pacman -Sy --noconfirm --needed gettext"
-            $fmt = Join-Path $msys "usr\bin\msgfmt.exe"
-            $mer = Join-Path $msys "usr\bin\msgmerge.exe"
-          }
-          if (!(Test-Path $fmt) -or !(Test-Path $mer)) {
-            $fake = Join-Path $env:RUNNER_TEMP "fake-gettext"
-            New-Item -ItemType Directory -Path $fake | Out-Null
-            $fmt = Join-Path $fake "msgfmt.cmd"
-            $mer = Join-Path $fake "msgmerge.cmd"
-            Set-Content -Path $fmt -Value "@echo msgfmt 0.0 (fake)`r`nexit /b 0`r`n" -Encoding ascii
-            Set-Content -Path $mer -Value "@echo msgmerge 0.0 (fake)`r`nexit /b 0`r`n" -Encoding ascii
-          }
-          "GETTEXT_MSGFMT_EXECUTABLE=$fmt"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "GETTEXT_MSGMERGE_EXECUTABLE=$mer"| Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "msgfmt:  $fmt"
-          Write-Host "msgmerge: $mer"
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release ^
+            -DwxWidgets_ROOT_DIR="%wxWidgets_ROOT_DIR%" ^
+            -DwxWidgets_LIB_DIR="%wxWidgets_LIB_DIR%" ^
+            -DwxWidgets_CONFIGURATION=%wxWidgets_CONFIGURATION% ^
+            -DBUILD_I18N=OFF -DPLUGIN_I18N=OFF
 
-      # 4) Configure (Win32/x86)
-      - name: Configure (Win32)
-        shell: pwsh
-        run: >
-          cmake -S . -B build -G "Visual Studio 17 2022" -A Win32
-          -DCMAKE_GENERATOR_PLATFORM=Win32 -DCMAKE_BUILD_TYPE=Release
-          -DwxWidgets_ROOT_DIR="$env:wxWidgets_ROOT_DIR"
-          -DwxWidgets_LIB_DIR="$env:wxWidgets_LIB_DIR"
-          -DwxWidgets_CONFIGURATION=$env:wxWidgets_CONFIGURATION
-          -DBUILD_I18N=OFF -DPLUGIN_I18N=OFF
-          -DGETTEXT_MSGMERGE_EXECUTABLE="$env:GETTEXT_MSGMERGE_EXECUTABLE"
-          -DGETTEXT_MSGFMT_EXECUTABLE="$env:GETTEXT_MSGFMT_EXECUTABLE"
+      # 4) Bygg selve plugin-tarballen (dette målet lager metadata.xml)
+      - name: Build tarball
+        shell: cmd
+        run: cmake --build build --config Release --target tarball --parallel
 
-      - name: Build
-        shell: pwsh
-        run: cmake --build build --config Release --parallel
-
-      - name: Package
-        shell: pwsh
-        run: cmake --build build --config Release --target package
-
-      # 5) Finn .tar.gz, sørg for metadata.xml, og last opp bare riktig fil
-      - name: Find built tarball
-        shell: pwsh
-        run: |
-          $t = Get-ChildItem build -Filter *.tar.gz -Recurse | Select-Object -First 1
-          if (-not $t) { throw "No .tar.gz found under build/" }
-          "TARBALL_PATH=$($t.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Tarball: $($t.FullName)"
-
-      - name: Ensure metadata.xml is present (rename any *.xml to metadata.xml)
-        shell: pwsh
-        run: |
-          $tar = $env:TARBALL_PATH
-          $tmp = Join-Path $env:RUNNER_TEMP "tarfix"
-          if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
-          New-Item -ItemType Directory -Path $tmp | Out-Null
-          tar -xzf $tar -C $tmp
-          $meta = Get-ChildItem $tmp -Filter metadata.xml -Recurse | Select-Object -First 1
-          if (-not $meta) {
-            $anyxml = Get-ChildItem $tmp -Filter *.xml -Recurse | Select-Object -First 1
-            if ($anyxml) {
-              Rename-Item -Path $anyxml.FullName -NewName "metadata.xml"
-            } else {
-              throw "No XML found inside tarball to rename to metadata.xml"
-            }
-          }
-          $fixed = Join-Path $env:RUNNER_TEMP "barentswatch_fixed.tar.gz"
-          if (Test-Path $fixed) { Remove-Item $fixed -Force }
-          tar -czf $fixed -C $tmp .
-          "TARBALL_PATH=$fixed" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Repacked tarball: $fixed"
-
+      # 5) Finn nyeste .tar.gz og verifiser at den inneholder metadata.xml
       - name: Verify tarball has metadata.xml
         shell: pwsh
         run: |
-          $ok = tar -tzf $env:TARBALL_PATH | Select-String -Pattern '(^|/)?metadata\.xml$'
-          if (-not $ok) { throw "metadata.xml missing" }
+          $t = Get-ChildItem -Recurse -Path build -Filter *.tar.gz | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $t) { throw "No .tar.gz produced under build/" }
+          "TARBALL_PATH=$($t.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Upload tarball (raw)
+          Write-Host "Tarball: $($t.FullName)"
+          # List innhold for logging
+          tar -tzf "$($t.FullName)" | %{ $_ } | Out-File -FilePath tar_list.txt -Encoding utf8
+          Get-Content tar_list.txt
+
+          $hasMeta = tar -tzf "$($t.FullName)" | Select-String -SimpleMatch "metadata.xml"
+          if (-not $hasMeta) { throw "metadata.xml missing in tarball: $($t.Name)" }
+
+      # 6) Last opp artefaktet
+      - name: Upload tarball
         uses: actions/upload-artifact@v4
         with:
           name: plugin-windows-tarball
