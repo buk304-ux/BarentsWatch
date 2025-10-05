@@ -9,7 +9,7 @@ jobs:
         with:
           submodules: recursive
 
-      # OpenCPN-deps (wxWidgets m.m.)
+      # --- Hent OpenCPN-deps (inkl. wxWidgets) og eksporter miljøvariabler ---
       - name: Prepare OpenCPN deps (wxWidgets)
         shell: cmd
         run: |
@@ -19,6 +19,7 @@ jobs:
           if errorlevel 1 exit /b 1
           call cache\wx-config.bat
           if errorlevel 1 exit /b 1
+          rem Disse settes av wx-config.bat (Win32 peker vanligvis til ...\lib\vc14x_dll)
           echo wxWidgets_ROOT_DIR=%wxWidgets_ROOT_DIR%>> %GITHUB_ENV%
           echo wxWidgets_LIB_DIR=%wxWidgets_LIB_DIR%>> %GITHUB_ENV%
           echo wxWidgets_CONFIGURATION=mswu>> %GITHUB_ENV%
@@ -29,21 +30,27 @@ jobs:
           echo wxWidgets_ROOT_DIR=%wxWidgets_ROOT_DIR%
           echo wxWidgets_LIB_DIR=%wxWidgets_LIB_DIR%
           echo wxWidgets_CONFIGURATION=%wxWidgets_CONFIGURATION%
+          if not exist "%wxWidgets_ROOT_DIR%" (echo Missing ROOT && exit /b 1)
+          if not exist "%wxWidgets_LIB_DIR%"  (echo Missing LIB  && exit /b 1)
 
-      # Gettext (msgfmt/msgmerge) via MSYS2
-      - name: Install MSYS2 + gettext tools
+      # --- Installer MSYS2 + gettext (gir msgfmt/msgmerge i msys\usr\bin) ---
+      - name: Install MSYS2 + gettext
         shell: pwsh
         run: |
           choco install -y msys2
           $roots = @("C:\tools\msys64","C:\msys64")
           $msys = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1
-          & "$msys\usr\bin\bash.exe" -lc "pacman -Sy --noconfirm --needed mingw-w64-i686-gettext-tools"
-          $fmt = Join-Path $msys "mingw32\bin\msgfmt.exe"
-          $mer = Join-Path $msys "mingw32\bin\msgmerge.exe"
+          if (-not $msys) { throw "MSYS2 not found after install." }
+          & "$msys\usr\bin\bash.exe" -lc "pacman -Sy --noconfirm --needed gettext"
+          $fmt = Join-Path $msys "usr\bin\msgfmt.exe"
+          $mer = Join-Path $msys "usr\bin\msgmerge.exe"
+          if (!(Test-Path $fmt) -or !(Test-Path $mer)) { throw 'Gettext tools not found after pacman install.' }
           'GETTEXT_MSGFMT_EXECUTABLE={0}' -f $fmt | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           'GETTEXT_MSGMERGE_EXECUTABLE={0}' -f $mer | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "msgfmt:  $fmt"
+          Write-Host "msgmerge: $mer"
 
-      # *** Win32 (x86) konfigurering ***
+      # --- Konfigurer som Win32 (x86) slik at alt matcher deps ---
       - name: Configure (Win32)
         shell: cmd
         run: |
