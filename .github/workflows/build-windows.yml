@@ -9,48 +9,51 @@ jobs:
         with:
           submodules: recursive
 
-      # --- Hent OpenCPN-deps (inkl. wxWidgets) og eksporter miljøvariabler ---
-      - name: Prepare OpenCPN deps (wxWidgets)
+      # 1) Hent OpenCPN og last ned Windows-deps (inkl. wxWidgets)
+      - name: Prepare OpenCPN deps (download toolchain + wxWidgets)
         shell: cmd
         run: |
           git clone --depth 1 https://github.com/OpenCPN/OpenCPN.git
           cd OpenCPN
           buildwin\win_deps.bat
           if errorlevel 1 exit /b 1
-          call cache\wx-config.bat
-          if errorlevel 1 exit /b 1
-          rem Disse settes av wx-config.bat (Win32 peker vanligvis til ...\lib\vc14x_dll)
-          echo wxWidgets_ROOT_DIR=%wxWidgets_ROOT_DIR%>> %GITHUB_ENV%
-          echo wxWidgets_LIB_DIR=%wxWidgets_LIB_DIR%>> %GITHUB_ENV%
-          echo wxWidgets_CONFIGURATION=mswu>> %GITHUB_ENV%
 
-      - name: Show wx env (debug)
-        shell: cmd
-        run: |
-          echo wxWidgets_ROOT_DIR=%wxWidgets_ROOT_DIR%
-          echo wxWidgets_LIB_DIR=%wxWidgets_LIB_DIR%
-          echo wxWidgets_CONFIGURATION=%wxWidgets_CONFIGURATION%
-          if not exist "%wxWidgets_ROOT_DIR%" (echo Missing ROOT && exit /b 1)
-          if not exist "%wxWidgets_LIB_DIR%"  (echo Missing LIB  && exit /b 1)
-
-      # --- Installer MSYS2 + gettext (gir msgfmt/msgmerge i msys\usr\bin) ---
-      - name: Install MSYS2 + gettext
+      # 2) Finn wxWidgets-katalog og lib-mappe i cache, eksporter til GITHUB_ENV
+      - name: Locate wxWidgets in cache and export env
         shell: pwsh
         run: |
-          choco install -y msys2
-          $roots = @("C:\tools\msys64","C:\msys64")
-          $msys = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $msys) { throw "MSYS2 not found after install." }
-          & "$msys\usr\bin\bash.exe" -lc "pacman -Sy --noconfirm --needed gettext"
-          $fmt = Join-Path $msys "usr\bin\msgfmt.exe"
-          $mer = Join-Path $msys "usr\bin\msgmerge.exe"
-          if (!(Test-Path $fmt) -or !(Test-Path $mer)) { throw 'Gettext tools not found after pacman install.' }
-          'GETTEXT_MSGFMT_EXECUTABLE={0}' -f $fmt | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          'GETTEXT_MSGMERGE_EXECUTABLE={0}' -f $mer | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "msgfmt:  $fmt"
-          Write-Host "msgmerge: $mer"
+          $cache = Join-Path $env:GITHUB_WORKSPACE 'OpenCPN\cache'
+          if (!(Test-Path $cache)) { throw "Cache folder not found: $cache" }
 
-      # --- Konfigurer som Win32 (x86) slik at alt matcher deps ---
+          # Finn wxWidgets-<versjon>-mappe (tar den nyeste hvis flere)
+          $wx = Get-ChildItem $cache -Directory -Filter 'wxWidgets-*' | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $wx) { throw "wxWidgets-* not found under $cache" }
+
+          $root = $wx.FullName
+
+          # Vanlige Win32 lib-stier fra win_deps.bat:
+          $candidates = @(
+            'lib\vc14x_dll',  # typisk for MSVC 2022 (Win32)
+            'lib\vc14x_lib',
+            'lib\vc14\mswud',
+            'lib'
+          )
+          $lib = $null
+          foreach ($rel in $candidates) {
+            $p = Join-Path $root $rel
+            if (Test-Path $p) { $lib = $p; break }
+          }
+          if (-not $lib) { throw "No wxWidgets lib dir found under $root" }
+
+          "wxWidgets_ROOT_DIR=$root"     | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "wxWidgets_LIB_DIR=$lib"       | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "wxWidgets_CONFIGURATION=mswu" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          Write-Host "wxWidgets_ROOT_DIR=$root"
+          Write-Host "wxWidgets_LIB_DIR=$lib"
+          Write-Host "wxWidgets_CONFIGURATION=mswu"
+
+      # 3) Konfigurer som Win32 (x86) og slå av i18n så vi slipper gettext
       - name: Configure (Win32)
         shell: cmd
         run: |
@@ -58,8 +61,7 @@ jobs:
             -DwxWidgets_ROOT_DIR="%wxWidgets_ROOT_DIR%" ^
             -DwxWidgets_LIB_DIR="%wxWidgets_LIB_DIR%" ^
             -DwxWidgets_CONFIGURATION=%wxWidgets_CONFIGURATION% ^
-            -DGETTEXT_MSGMERGE_EXECUTABLE="%GETTEXT_MSGMERGE_EXECUTABLE%" ^
-            -DGETTEXT_MSGFMT_EXECUTABLE="%GETTEXT_MSGFMT_EXECUTABLE%"
+            -DBUILD_I18N=OFF -DPLUGIN_I18N=OFF
 
       - name: Build
         shell: cmd
