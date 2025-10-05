@@ -1,18 +1,42 @@
 name: build-windows
 on: [push, pull_request]
+
 jobs:
   win:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive   # HENTER opencpn-libs m.m.
+          submodules: recursive   # hent eventuelle git-submoduler
+
+      # Hent/verifiser verktøy som OpenCPN-skriptene bruker (7zip finnes ofte fra før)
+      - name: Ensure 7zip present
+        shell: pwsh
+        run: |
+          choco install -y 7zip || echo "7zip already present"
+
+      # Hent OpenCPN og kjør deps-script som setter opp cache (inkl. wxWidgets)
+      - name: Prepare OpenCPN deps (wxWidgets)
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/OpenCPN/OpenCPN.git
+          cd OpenCPN
+          ./buildwin/win_deps.bat
+          ./cache/wx-config.bat
+          # Eksporter miljøvariabler for videre CMake-kjøring
+          echo "WXWIN=$env:wxWidgets_ROOT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "wxWidgets_ROOT_DIR=$env:wxWidgets_ROOT_DIR" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # Konfigurer og bygg plugin i x64 (OpenCPN 5.x for Windows er 64-bit)
       - name: Configure (x64)
         run: cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release
+
       - name: Build
         run: cmake --build build --config Release --parallel
+
       - name: Package
         run: cmake --build build --config Release --target package
+
       - name: Upload tarball
         uses: actions/upload-artifact@v4
         with:
